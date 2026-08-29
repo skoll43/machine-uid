@@ -261,4 +261,44 @@ pub mod machine_id {
     }
 }
 
+#[cfg(target_os = "android")]
+pub mod machine_id {
+    use super::read_file;
+    use std::error::Error;
+    use std::ffi::{CStr, CString};
+    use std::os::raw::c_char;
+
+    extern "C" {
+        fn __system_property_get(name: *const c_char, value: *mut c_char) -> i32;
+    }
+
+    /// Android serial properties, tried in order (whichever the vendor
+    /// sets; e.g. gsm.serial on many RILs, ro.boot.serialno /
+    /// ro.serialno on others). All are persistent, per-device, and
+    /// readable via the property namespace — no root, no JDK, no
+    /// subprocess. Last resort: the per-boot boot id.
+    const SERIAL_PROPS: [&str; 5] = [
+        "gsm.serial",
+        "ro.ril.oem.sno",
+        "persist.radio.serialno",
+        "ro.boot.serialno",
+        "ro.serialno",
+    ];
+
+    pub fn get_machine_id() -> Result<String, Box<dyn Error>> {
+        let mut buf = [0 as c_char; 128];
+        for key in SERIAL_PROPS {
+            let name = CString::new(key).map_err(|e| -> Box<dyn Error> { Box::new(e) })?;
+            let n = unsafe { __system_property_get(name.as_ptr(), buf.as_mut_ptr()) };
+            if n > 0 {
+                let s = unsafe { CStr::from_ptr(buf.as_ptr()) }.to_string_lossy().into_owned();
+                if !s.is_empty() {
+                    return Ok(s);
+                }
+            }
+        }
+        read_file("/proc/sys/kernel/random/boot_id")
+    }
+}
+
 pub use machine_id::get_machine_id as get;
