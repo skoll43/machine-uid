@@ -265,11 +265,28 @@ pub mod machine_id {
 pub mod machine_id {
     use super::read_file;
     use std::error::Error;
+    use std::ffi::{CStr, CString};
+    use std::os::raw::c_char;
 
-    /// Android has no persistent machine-id; the boot id from
-    /// /proc/sys/kernel/random/boot_id is the closest stable identifier
-    /// readable without root. It changes on reboot.
+    extern "C" {
+        fn __system_property_get(name: *const c_char, value: *mut c_char) -> i32;
+    }
+
+    /// Android: prefer the persistent telephony serial (`gsm.serial`,
+    /// readable via the property namespace — no root, no JDK, no
+    /// subprocess). Falls back to the per-boot boot id
+    /// (/proc/sys/kernel/random/boot_id) when the property is absent,
+    /// e.g. on WiFi-only devices.
     pub fn get_machine_id() -> Result<String, Box<dyn Error>> {
+        let name = CString::new("gsm.serial").map_err(|e| -> Box<dyn Error> { Box::new(e) })?;
+        let mut buf = [0 as c_char; 128];
+        let n = unsafe { __system_property_get(name.as_ptr(), buf.as_mut_ptr()) };
+        if n > 0 {
+            let s = unsafe { CStr::from_ptr(buf.as_ptr()) }.to_string_lossy().into_owned();
+            if !s.is_empty() {
+                return Ok(s);
+            }
+        }
         read_file("/proc/sys/kernel/random/boot_id")
     }
 }
